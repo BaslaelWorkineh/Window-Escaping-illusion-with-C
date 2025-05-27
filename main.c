@@ -1,9 +1,40 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <stdio.h>
+#include <math.h>
 
-#define NUM_SPRITES 6
+#define NUM_SPRITES 4 
 const int ANIMATION_DELAY_MS = 150;
+
+const float SPRITE_SCALE_FACTOR = 1.0f;
+const float WINDOW_SCALE_FACTOR = 0.85f; 
+const int SPRITE_VERTICAL_OFFSET = 0;  
+
+typedef struct {
+    int x, y;
+    int active;
+} Projectile;
+
+// Hardcoded frame data from sprites/spritesheet.json
+SDL_Rect spriteFrames[NUM_SPRITES] = {
+    {1,   1,   128, 128}, 
+    {131, 1,   128, 128},
+    {1,   131, 128, 128}, 
+    {131, 131, 128, 128} 
+};
+
+// Helper function to draw a filled circle  not used here tho
+void SDL_RenderFillCircle(SDL_Renderer *renderer, int x, int y, int radius) {
+    for (int w = 0; w < radius * 2; w++) {
+        for (int h = 0; h < radius * 2; h++) {
+            int dx = radius - w; 
+            int dy = radius - h; 
+            if ((dx*dx + dy*dy) <= (radius * radius)) {
+                SDL_RenderDrawPoint(renderer, x + dx, y + dy);
+            }
+        }
+    }
+}
 
 int main(int argc, char* argv[]) {
     SDL_Window* window = NULL;
@@ -12,13 +43,18 @@ int main(int argc, char* argv[]) {
     SDL_Surface* loadedSurface = NULL;
     SDL_Texture* windowImgTexture = NULL;
     SDL_Surface* windowLoadedSurface = NULL;
-    SDL_Texture* spriteTextures[NUM_SPRITES] = {NULL};
+    SDL_Texture* gameBgTexture = NULL;
+    SDL_Surface* gameBgLoadedSurface = NULL; 
+    SDL_Texture* spritesheetTexture = NULL;
     char spritePath[256];
     int currentSpriteFrame = 0;
     Uint32 lastAnimationTime = 0;
     int spriteX = 0;
     const int SPRITE_SPEED = 2;
-    int firstSpriteWidth = 0;
+    // Remove spriteTextures array and related code
+    // int firstSpriteOriginalWidth = 0;
+    int windowImgWidth = 0; // Declare windowImgWidth
+    int windowImgHeight = 0; // Declare windowImgHeight
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
@@ -103,38 +139,40 @@ int main(int argc, char* argv[]) {
     }
     SDL_FreeSurface(windowLoadedSurface);
 
-    for (int i = 0; i < NUM_SPRITES; ++i) {
-        snprintf(spritePath, sizeof(spritePath), "sprites/%d.png", i + 1);
-        SDL_Surface* spriteSurface = IMG_Load(spritePath);
-        if (spriteSurface == NULL) {
-            printf("Unable to load sprite %s! SDL_image Error: %s\\n", spritePath, IMG_GetError());
-        } else {
-            spriteTextures[i] = SDL_CreateTextureFromSurface(renderer, spriteSurface);
-            if (spriteTextures[i] == NULL) {
-                printf("Unable to create texture from sprite %s! SDL Error: %s\\n", spritePath, SDL_GetError());
-            }
-            SDL_FreeSurface(spriteSurface);
-        }
+    if (windowImgTexture != NULL) {
+        SDL_QueryTexture(windowImgTexture, NULL, NULL, &windowImgWidth, &windowImgHeight);
+    } else {
+        printf("ERROR: windowImgTexture is NULL, cannot get dimensions for window.png.\n");
+        windowImgWidth = 800;
+        windowImgHeight = 600;
     }
 
-    int windowImgWidth, windowImgHeight;
-    SDL_QueryTexture(windowImgTexture, NULL, NULL, &windowImgWidth, &windowImgHeight);
+    gameBgLoadedSurface = IMG_Load("gamebg.jpg");
+    if (gameBgLoadedSurface == NULL) {
+        printf("Unable to load image %s! SDL_image Error: %s\\n", "gamebg.jpg", IMG_GetError());
+    } else {
+        gameBgTexture = SDL_CreateTextureFromSurface(renderer, gameBgLoadedSurface);
+        if (gameBgTexture == NULL) {
+            printf("Unable to create texture from %s! SDL Error: %s\\n", "gamebg.jpg", SDL_GetError());
+        }
+        SDL_FreeSurface(gameBgLoadedSurface);
+    }
 
     SDL_Rect windowDestRect;
-    windowDestRect.w = windowImgWidth;
-    windowDestRect.h = windowImgHeight;
+    windowDestRect.w = windowImgWidth * WINDOW_SCALE_FACTOR;
+    windowDestRect.h = windowImgHeight * WINDOW_SCALE_FACTOR;
     windowDestRect.x = (dm.w - windowDestRect.w) / 2;
     windowDestRect.y = (dm.h - windowDestRect.h) / 2;
 
-    if (spriteTextures[0] != NULL) {
-        SDL_QueryTexture(spriteTextures[0], NULL, NULL, &firstSpriteWidth, NULL);
-        spriteX = windowDestRect.x + (windowDestRect.w - firstSpriteWidth) / 2;
-        if (firstSpriteWidth > windowDestRect.w) {
-            spriteX = windowDestRect.x;
-        }
+    int firstSpriteOriginalWidth = spriteFrames[0].w;
+    if (firstSpriteOriginalWidth > 0) {
+        int scaledFirstSpriteWidth = firstSpriteOriginalWidth * SPRITE_SCALE_FACTOR;
+        spriteX = windowDestRect.x + windowDestRect.w - scaledFirstSpriteWidth;
+        printf("DEBUG: Sprite initial X (right edge): %d, First Sprite Original Width: %d, Scaled Width: %d\\n", spriteX, firstSpriteOriginalWidth, scaledFirstSpriteWidth);
     } else {
-        spriteX = 0;
-        firstSpriteWidth = 0;
+        spriteX = windowDestRect.x + windowDestRect.w / 2;
+        firstSpriteOriginalWidth = 0;
+        printf("DEBUG: spriteTextures[0] is NULL. Sprite initial X set to %d (center of window.png).\\n", spriteX);
     }
 
     SDL_RenderClear(renderer);
@@ -142,52 +180,85 @@ int main(int argc, char* argv[]) {
     SDL_RenderCopy(renderer, windowImgTexture, NULL, &windowDestRect);
     SDL_RenderPresent(renderer);
 
+    printf("DEBUG: Screen dimensions: w=%d, h=%d\n", dm.w, dm.h);
+    printf("DEBUG: window.png rect: x=%d, y=%d, w=%d, h=%d\n", windowDestRect.x, windowDestRect.y, windowDestRect.w, windowDestRect.h);
+
     int quit = 0;
     SDL_Event e;
-    lastAnimationTime = SDL_GetTicks();
+    lastAnimationTime = 0;
+
+    spritesheetTexture = IMG_LoadTexture(renderer, "sprites/spritesheet.png");
+    if (!spritesheetTexture) {
+        printf("Unable to load spritesheet! SDL_image Error: %s\n", IMG_GetError());
+        SDL_DestroyTexture(imgTexture);
+        SDL_DestroyTexture(windowImgTexture);
+        if (gameBgTexture != NULL) SDL_DestroyTexture(gameBgTexture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        return 1;
+    } else {
+        printf("DEBUG: spritesheet.png loaded successfully!\n");
+    }
 
     while (!quit) {
+        Uint32 currentTime = SDL_GetTicks();
+
         while (SDL_PollEvent(&e) != 0) {
             if (e.type == SDL_QUIT) {
                 quit = 1;
             }
             if (e.type == SDL_KEYDOWN) {
+                printf("DEBUG: Key pressed: %d\n", e.key.keysym.sym);
                 if (e.key.keysym.sym == SDLK_ESCAPE) {
                     quit = 1;
                 }
             }
         }
 
-        Uint32 currentTime = SDL_GetTicks();
         if (currentTime > lastAnimationTime + ANIMATION_DELAY_MS) {
             currentSpriteFrame = (currentSpriteFrame + 1) % NUM_SPRITES;
             lastAnimationTime = currentTime;
+            printf("DEBUG: Animation frame: %d\n", currentSpriteFrame);
         }
 
-        if (firstSpriteWidth > 0) {
-            spriteX += SPRITE_SPEED;
-            if (spriteX > dm.w) {
-                spriteX = 0 - firstSpriteWidth;
+        if (firstSpriteOriginalWidth > 0) {
+            spriteX -= SPRITE_SPEED; 
+            int scaledCurrentSpriteWidthForWrap = spriteFrames[currentSpriteFrame].w * SPRITE_SCALE_FACTOR;
+            if (spriteX + scaledCurrentSpriteWidthForWrap < 0) { 
+                spriteX = dm.w; 
             }
+            printf("DEBUG: spriteX: %d\n", spriteX);
         }
 
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); 
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, imgTexture, NULL, NULL);
         SDL_RenderCopy(renderer, windowImgTexture, NULL, &windowDestRect);
 
-        if (spriteTextures[currentSpriteFrame] != NULL) {
-            int spriteWidth, spriteHeight;
-            SDL_QueryTexture(spriteTextures[currentSpriteFrame], NULL, NULL, &spriteWidth, &spriteHeight);
+        if (gameBgTexture != NULL) {
+            SDL_Rect gameBgDestRect;
+            int gameBgTopOffset = 30; 
+            gameBgDestRect.x = windowDestRect.x;
+            gameBgDestRect.y = windowDestRect.y + gameBgTopOffset;
+            gameBgDestRect.w = windowDestRect.w; 
+            gameBgDestRect.h = windowDestRect.h - gameBgTopOffset; 
 
-            SDL_Rect spriteDestRect;
-            spriteDestRect.w = spriteWidth;
-            spriteDestRect.h = spriteHeight;
-            spriteDestRect.x = spriteX;
-            spriteDestRect.y = windowDestRect.y + (windowDestRect.h - spriteHeight) / 2;
-
-            SDL_RenderCopy(renderer, spriteTextures[currentSpriteFrame], NULL, &spriteDestRect);
+            SDL_RenderCopy(renderer, gameBgTexture, NULL, &gameBgDestRect);
         }
 
+        SDL_Rect srcRect = spriteFrames[currentSpriteFrame];
+        SDL_Rect spriteDestRect;
+        spriteDestRect.w = srcRect.w * SPRITE_SCALE_FACTOR;
+        spriteDestRect.h = srcRect.h * SPRITE_SCALE_FACTOR;
+        spriteDestRect.x = spriteX;
+        spriteDestRect.y = windowDestRect.y + (windowDestRect.h - spriteDestRect.h) / 2 + SPRITE_VERTICAL_OFFSET;
+        printf("DEBUG: Rendering frame %d at x=%d, y=%d, w=%d, h=%d\n", currentSpriteFrame, spriteDestRect.x, spriteDestRect.y, spriteDestRect.w, spriteDestRect.h);
+
+        SDL_RenderCopyEx(renderer, spritesheetTexture, &srcRect, &spriteDestRect, 0, NULL, SDL_FLIP_HORIZONTAL);
+
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderPresent(renderer);
 
         SDL_Delay(10);
@@ -195,11 +266,10 @@ int main(int argc, char* argv[]) {
 
     SDL_DestroyTexture(imgTexture);
     SDL_DestroyTexture(windowImgTexture);
-    for (int i = 0; i < NUM_SPRITES; ++i) {
-        if (spriteTextures[i] != NULL) {
-            SDL_DestroyTexture(spriteTextures[i]);
-        }
+    if (gameBgTexture != NULL) { 
+        SDL_DestroyTexture(gameBgTexture);
     }
+    SDL_DestroyTexture(spritesheetTexture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
 
